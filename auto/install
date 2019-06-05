@@ -204,6 +204,7 @@ build:
 install:
 	\$(MAKE) -f $NGX_MAKEFILE install
 
+.PHONY: modules
 modules:
 	\$(MAKE) -f $NGX_MAKEFILE modules
 
