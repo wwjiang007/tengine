@@ -107,6 +107,17 @@ struct ngx_ssl_connection_s {
     unsigned                    in_early:1;
     unsigned                    early_preread:1;
     unsigned                    write_blocked:1;
+
+    
+
+#if (T_NGX_HAVE_DTLS)
+    unsigned                    bio_changed:1;
+    unsigned                    dtls_send:1;
+    unsigned                    client:1;
+    unsigned                    retrans_times;
+    ngx_event_t                *retrans;
+    u_char                      dtls_cookie_secret[32];
+#endif
 };
 
 
@@ -160,6 +171,10 @@ typedef struct {
 #define NGX_SSL_TLSv1_2  0x0020
 #define NGX_SSL_TLSv1_3  0x0040
 
+#if (T_NGX_HAVE_DTLS)
+#define NGX_SSL_DTLSv1   0x0080
+#define NGX_SSL_DTLSv1_2 0x0200
+#endif
 
 #define NGX_SSL_BUFFER   1
 #define NGX_SSL_CLIENT   2
@@ -275,6 +290,8 @@ ngx_int_t ngx_ssl_get_client_v_remain(ngx_connection_t *c, ngx_pool_t *pool,
     ngx_str_t *s);
 #if (T_NGX_SSL_HANDSHAKE_TIME)
 ngx_int_t ngx_ssl_get_handshake_time(ngx_connection_t *c, ngx_pool_t *pool,
+    ngx_str_t *s);
+ngx_int_t ngx_ssl_get_handshake_time_msec(ngx_connection_t *c, ngx_pool_t *pool,
     ngx_str_t *s);
 #endif
 

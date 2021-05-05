@@ -133,6 +133,9 @@ typedef struct {
 #define NGX_HTTP_UPSTREAM_BACKUP        0x0020
 #define NGX_HTTP_UPSTREAM_MAX_CONNS     0x0100
 #define NGX_HTTP_UPSTREAM_ID            0x0040
+#if (T_NGX_HTTP_UPSTREAM_RANDOM)
+#define T_NGX_HTTP_UPSTREAM_RANDOM_FLAG 0x0200
+#endif
 
 
 struct ngx_http_upstream_srv_conf_s {
@@ -178,7 +181,6 @@ typedef struct {
     ngx_msec_t                       connect_timeout;
     ngx_msec_t                       send_timeout;
     ngx_msec_t                       read_timeout;
-    ngx_msec_t                       timeout;
     ngx_msec_t                       next_upstream_timeout;
 
     size_t                           send_lowat;
@@ -426,6 +428,14 @@ struct ngx_http_upstream_s {
     unsigned                         request_body_sent:1;
     unsigned                         request_body_blocked:1;
     unsigned                         header_sent:1;
+
+#if (T_NGX_MULTI_UPSTREAM)
+    unsigned                         multi:1;
+    void                            *multi_init;
+    ngx_pool_t                      *send_pool;
+    ngx_flag_t                       multi_mode;
+#endif
+
 };
 
 

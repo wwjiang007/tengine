@@ -385,8 +385,15 @@ static ngx_http_variable_t  ngx_http_ssl_vars[] = {
       (uintptr_t) ngx_ssl_get_client_v_remain, NGX_HTTP_VAR_CHANGEABLE, 0 },
 
 #if (T_NGX_SSL_HANDSHAKE_TIME)
+    /* $ssl_shandshakd_time deprecated and will be removed in the next release */
     { ngx_string("ssl_handshakd_time"), NULL, ngx_http_ssl_variable,
       (uintptr_t) ngx_ssl_get_handshake_time, NGX_HTTP_VAR_CHANGEABLE, 0 },
+
+    { ngx_string("ssl_handshake_time"), NULL, ngx_http_ssl_variable,
+      (uintptr_t) ngx_ssl_get_handshake_time, NGX_HTTP_VAR_CHANGEABLE, 0 },
+
+    { ngx_string("ssl_handshake_time_msec"), NULL, ngx_http_ssl_variable,
+      (uintptr_t) ngx_ssl_get_handshake_time_msec, NGX_HTTP_VAR_CHANGEABLE, 0 },
 #endif
 
       ngx_http_null_variable
@@ -805,6 +812,15 @@ ngx_http_ssl_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
         return NGX_CONF_ERROR;
     }
 
+    cln = ngx_pool_cleanup_add(cf->pool, 0);
+    if (cln == NULL) {
+        ngx_ssl_cleanup_ctx(&conf->ssl);
+        return NGX_CONF_ERROR;
+    }
+
+    cln->handler = ngx_ssl_cleanup_ctx;
+    cln->data = &conf->ssl;
+
 #ifdef SSL_CTRL_SET_TLSEXT_HOSTNAME
 
     if (SSL_CTX_set_tlsext_servername_callback(conf->ssl.ctx,
@@ -827,14 +843,6 @@ ngx_http_ssl_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
     SSL_CTX_set_next_protos_advertised_cb(conf->ssl.ctx,
                                           ngx_http_ssl_npn_advertised, NULL);
 #endif
-
-    cln = ngx_pool_cleanup_add(cf->pool, 0);
-    if (cln == NULL) {
-        return NGX_CONF_ERROR;
-    }
-
-    cln->handler = ngx_ssl_cleanup_ctx;
-    cln->data = &conf->ssl;
 
     if (ngx_http_ssl_compile_certificates(cf, conf) != NGX_OK) {
         return NGX_CONF_ERROR;
@@ -881,7 +889,7 @@ ngx_http_ssl_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 
         if (conf->client_certificate.len == 0 && conf->verify != 3) {
             ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
-                          "no ssl_client_certificate for ssl_client_verify");
+                          "no ssl_client_certificate for ssl_verify_client");
             return NGX_CONF_ERROR;
         }
 

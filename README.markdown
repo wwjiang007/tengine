@@ -9,11 +9,11 @@ Tengine has been an open source project since December 2011. It is being activel
 Features
 ========
 
-* All features of nginx-1.15.9 are inherited, i.e., it is 100% compatible with nginx.
+* All features of nginx-1.18.0 are inherited, i.e., it is 100% compatible with nginx.
 * Support the CONNECT HTTP method for forward proxy.
 * Support asynchronous OpenSSL, using hardware such as QAT for HTTPS acceleration.
 * Enhanced operations monitoring, such as asynchronous log & rollback, DNS caching, memory usage, etc.
-* Support server_name in Stream modlue.
+* Support server_name in Stream module.
 * More load balancing methods, e.g., consistent hashing, and session persistence.
 * Input body filter support. It's quite handy to write Web Application Firewalls using this mechanism.
 * Dynamic scripting language (Lua) support, which is very efficient and makes it easy to extend core functionalities.
@@ -56,3 +56,4 @@ Contact
 
 [https://github.com/alibaba/tengine/issues](https://github.com/alibaba/tengine/issues)
 
+Dingtalk user group: 23394285

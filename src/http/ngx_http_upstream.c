@@ -12,6 +12,10 @@
 #include <ngx_md5.h>
 #endif
 
+#if (T_NGX_MULTI_UPSTREAM)
+#include <ngx_http_multi_upstream_module.h>
+#endif
+
 
 #if (NGX_HTTP_CACHE)
 static ngx_int_t ngx_http_upstream_cache(ngx_http_request_t *r,
@@ -629,10 +633,6 @@ ngx_http_upstream_init_request(ngx_http_request_t *r)
                 u->cache_status = NGX_HTTP_CACHE_MISS;
                 u->request_sent = 1;
             }
-
-            if (ngx_http_upstream_cache_background_update(r, u) != NGX_OK) {
-                rc = NGX_ERROR;
-            }
         }
 
         if (rc != NGX_DECLINED) {
@@ -963,9 +963,14 @@ ngx_http_upstream_cache(ngx_http_request_t *r, ngx_http_upstream_t *u)
              || c->stale_updating) && !r->background
             && u->conf->cache_background_update)
         {
-            r->cache->background = 1;
-            u->cache_status = rc;
-            rc = NGX_OK;
+            if (ngx_http_upstream_cache_background_update(r, u) == NGX_OK) {
+                r->cache->background = 1;
+                u->cache_status = rc;
+                rc = NGX_OK;
+
+            } else {
+                rc = NGX_ERROR;
+            }
         }
 
         break;
@@ -1166,10 +1171,6 @@ ngx_http_upstream_cache_background_update(ngx_http_request_t *r,
     ngx_http_upstream_t *u)
 {
     ngx_http_request_t  *sr;
-
-    if (!r->cached || !r->cache->background) {
-        return NGX_OK;
-    }
 
     if (r == r->main) {
         r->preserve_body = 1;
@@ -1577,6 +1578,11 @@ ngx_http_upstream_check_broken_connection(ngx_http_request_t *r,
     }
 }
 
+#if (T_NGX_MULTI_UPSTREAM)
+
+#include "ngx_http_multi_upstream.c"
+
+#endif /* T_NGX_MULTI_UPSTREAM */
 
 #if (!T_NGX_HTTP_DYNAMIC_RESOLVE)
 static
@@ -1640,6 +1646,47 @@ ngx_http_upstream_connect(ngx_http_request_t *r, ngx_http_upstream_t *u)
     /* rc == NGX_OK || rc == NGX_AGAIN || rc == NGX_DONE */
 
     c = u->peer.connection;
+
+#if (T_NGX_MULTI_UPSTREAM)
+    if (u->multi) {
+        if (!(u->multi_mode & NGX_MULTI_UPS_SUPPORT_MULTI)) {
+            ngx_http_multi_upstream_finalize_request(c,
+                                                     NGX_HTTP_INTERNAL_SERVER_ERROR);
+            ngx_log_error(NGX_LOG_ERR, c->log, 0,
+                          "multi: upstream configured multi, but handler no support");
+            return;
+        }
+
+        if (rc == NGX_AGAIN) { //first real connect
+            c->read->handler = ngx_http_multi_upstream_connect_handler;
+            c->write->handler = ngx_http_multi_upstream_connect_handler;
+            ngx_add_timer(c->write, u->conf->connect_timeout);
+            ngx_log_error(NGX_LOG_INFO, c->log, 0,
+                          "multi: connect new to backend %p", c);
+        } else if (rc == NGX_DONE) { //use exist connection
+            if (ngx_multi_connected(c)) {
+                ngx_log_error(NGX_LOG_INFO, c->log, 0, "multi: connect reuse %p", c);
+
+                ngx_http_multi_upstream_init_request(c, r);
+                ngx_http_multi_upstream_process(c, 1);
+            } else {
+                ngx_log_error(NGX_LOG_ERR, c->log, 0, "multi: connect reuse unfinished %p", c);
+            }
+        } else {
+            ngx_log_error(NGX_LOG_ERR, c->log, 0,
+                          "multi: connect return %i error", rc);
+        }
+
+        return;
+    } else if ((u->multi_mode & NGX_MULTI_UPS_NEED_MULTI) == NGX_MULTI_UPS_NEED_MULTI) {
+        ngx_http_upstream_finalize_request(r, u,
+                                           NGX_HTTP_INTERNAL_SERVER_ERROR);
+        ngx_log_error(NGX_LOG_ERR, c->log, 0,
+                      "multi: need multi, but upstream not support, "
+                      "maybee need configuration 'multi' in upstream");
+        return;
+    }
+#endif
 
     c->requests++;
 
@@ -1859,9 +1906,12 @@ ngx_http_upstream_ssl_handshake(ngx_http_request_t *r, ngx_http_upstream_t *u,
             }
         }
 
-        if (u->conf->ssl_session_reuse) {
-            u->peer.save_session(&u->peer, u->peer.data);
+#if (T_NGX_MULTI_UPSTREAM)
+        if (u->multi) {
+            ngx_http_multi_upstream_connect_init(c);
+            return;
         }
+#endif
 
         c->write->handler = ngx_http_upstream_handler;
         c->read->handler = ngx_http_upstream_handler;
@@ -2145,6 +2195,14 @@ ngx_http_upstream_send_request(ngx_http_request_t *r, ngx_http_upstream_t *u,
             c->tcp_nopush = NGX_TCP_NOPUSH_UNSET;
         }
 
+#if (T_NGX_MULTI_UPSTREAM)
+        if (u->multi && r->connection != u->peer.connection && !r->waiting) {
+            ngx_multi_connection_t *multi_c = ngx_get_multi_connection(c);
+            ngx_queue_insert_tail(&multi_c->waiting_list, &r->waiting_queue);
+            r->waiting = 1;
+        }
+#endif
+
         return;
     }
 
@@ -2186,6 +2244,12 @@ ngx_http_upstream_send_request(ngx_http_request_t *r, ngx_http_upstream_t *u,
         ngx_add_timer(c->read, u->conf->read_timeout);
 
         if (c->read->ready) {
+#if (T_NGX_MULTI_UPSTREAM)
+            if (u->multi) {
+                ngx_http_multi_upstream_read_handler(c);
+                return;
+            }
+#endif
             ngx_http_upstream_process_header(r, u);
             return;
         }
@@ -2223,6 +2287,11 @@ ngx_http_upstream_send_request_body(ngx_http_request_t *r,
             u->request_body_blocked = 1;
 
         } else {
+#if T_NGX_MULTI_UPSTREAM
+            if (u->multi && rc == NGX_OK) {
+                ngx_multi_clean_leak(u->peer.connection);
+            }
+#endif
             u->request_body_blocked = 0;
         }
 
@@ -3068,6 +3137,7 @@ ngx_http_upstream_send_response(ngx_http_request_t *r, ngx_http_upstream_t *u)
                              ngx_http_upstream_process_non_buffered_downstream;
 
         r->limit_rate = 0;
+        r->limit_rate_set = 1;
 
         if (u->input_filter_init(u->input_filter_ctx) == NGX_ERROR) {
             ngx_http_upstream_finalize_request(r, u, NGX_ERROR);
@@ -3425,6 +3495,7 @@ ngx_http_upstream_process_upgraded(ngx_http_request_t *r,
     size_t                     size;
     ssize_t                    n;
     ngx_buf_t                 *b;
+    ngx_uint_t                 flags;
     ngx_connection_t          *c, *downstream, *upstream, *dst, *src;
     ngx_http_upstream_t       *u;
     ngx_http_core_loc_conf_t  *clcf;
@@ -3563,7 +3634,14 @@ ngx_http_upstream_process_upgraded(ngx_http_request_t *r,
         ngx_del_timer(upstream->write);
     }
 
-    if (ngx_handle_read_event(upstream->read, 0) != NGX_OK) {
+    if (upstream->read->eof || upstream->read->error) {
+        flags = NGX_CLOSE_EVENT;
+
+    } else {
+        flags = 0;
+    }
+
+    if (ngx_handle_read_event(upstream->read, flags) != NGX_OK) {
         ngx_http_upstream_finalize_request(r, u, NGX_ERROR);
         return;
     }
@@ -3582,7 +3660,14 @@ ngx_http_upstream_process_upgraded(ngx_http_request_t *r,
         return;
     }
 
-    if (ngx_handle_read_event(downstream->read, 0) != NGX_OK) {
+    if (downstream->read->eof || downstream->read->error) {
+        flags = NGX_CLOSE_EVENT;
+
+    } else {
+        flags = 0;
+    }
+
+    if (ngx_handle_read_event(downstream->read, flags) != NGX_OK) {
         ngx_http_upstream_finalize_request(r, u, NGX_ERROR);
         return;
     }
@@ -3619,6 +3704,13 @@ ngx_http_upstream_process_non_buffered_downstream(ngx_http_request_t *r)
         return;
     }
 
+#if (T_NGX_MULTI_UPSTREAM)
+    if (u->multi) {
+        ngx_http_multi_upstream_process_non_buffered_request(r);
+        return;
+    }
+#endif
+
     ngx_http_upstream_process_non_buffered_request(r, 1);
 }
 
@@ -3654,6 +3746,7 @@ ngx_http_upstream_process_non_buffered_request(ngx_http_request_t *r,
     ssize_t                    n;
     ngx_buf_t                 *b;
     ngx_int_t                  rc;
+    ngx_uint_t                 flags;
     ngx_connection_t          *downstream, *upstream;
     ngx_http_upstream_t       *u;
     ngx_http_core_loc_conf_t  *clcf;
@@ -3757,7 +3850,14 @@ ngx_http_upstream_process_non_buffered_request(ngx_http_request_t *r,
         ngx_del_timer(downstream->write);
     }
 
-    if (ngx_handle_read_event(upstream->read, 0) != NGX_OK) {
+    if (upstream->read->eof || upstream->read->error) {
+        flags = NGX_CLOSE_EVENT;
+
+    } else {
+        flags = 0;
+    }
+
+    if (ngx_handle_read_event(upstream->read, flags) != NGX_OK) {
         ngx_http_upstream_finalize_request(r, u, NGX_ERROR);
         return;
     }
@@ -4231,6 +4331,16 @@ ngx_http_upstream_next(ngx_http_request_t *r, ngx_http_upstream_t *u,
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                    "http next upstream, %xi", ft_type);
 
+#if (T_NGX_MULTI_UPSTREAM)
+    if (u->multi && ngx_http_multi_connection_fake(r)) {
+        ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                "multi: http next upstream fake_r %p", r);
+
+        ngx_http_multi_upstream_next(r->connection, ft_type);
+        return;
+    }
+#endif
+
     if (u->peer.sockaddr) {
 
         if (u->peer.connection) {
@@ -4412,6 +4522,16 @@ ngx_http_upstream_finalize_request(ngx_http_request_t *r,
 
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                    "finalize http upstream request: %i", rc);
+
+#if (T_NGX_MULTI_UPSTREAM)
+    if (u->multi && ngx_http_multi_connection_fake(r)) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                "http finalize upstream fake_r %p", r);
+
+        ngx_http_multi_upstream_finalize_request(r->connection, rc);
+        return;
+    }
+#endif
 
     if (u->cleanup == NULL) {
         /* the request was already finalized */
@@ -4921,6 +5041,7 @@ ngx_http_upstream_process_limit_rate(ngx_http_request_t *r, ngx_table_elt_t *h,
 
     if (n != NGX_ERROR) {
         r->limit_rate = (size_t) n;
+        r->limit_rate_set = 1;
     }
 
     return NGX_OK;
@@ -6837,6 +6958,10 @@ ngx_http_upstream_init_process(ngx_cycle_t *cycle)
     uscfp = umcf->upstreams.elts;
 
     for (i = 0; i < umcf->upstreams.nelts; i++) {
+	if (!(uscfp[i]->flags & T_NGX_HTTP_UPSTREAM_RANDOM_FLAG)) {
+	    continue;
+	}
+
         peers = uscfp[i]->peer.data;
 
         if (peers == NULL) {
